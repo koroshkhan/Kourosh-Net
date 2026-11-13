@@ -1,4 +1,4 @@
-name: Build Kourosh NetOptimizer APK (Smart Path + Cached)
+name: Build Kourosh NetOptimizer APK (Permanent Cache)
 
 on:
   push:
@@ -19,51 +19,57 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: 3. Cache Android SDK & Xray Core AAR
+      - name: 3. Cache Static Binaries (Gradle 8.5 + Xray libv2ray.aar)
         uses: actions/cache@v4
         with:
           path: |
-            ~/.android/build-cache
-            /usr/local/lib/android/sdk/platforms/android-34
-            /usr/local/lib/android/sdk/build-tools/34.0.0
+            /opt/gradle/gradle-8.5
             **/app/libs/libv2ray.aar
-          key: android-xray-core-v3-${{ runner.os }}
-          restore-keys: |
-            android-xray-core-v3-
+          key: static-tools-gradle85-xray-v1
 
-      - name: 4. Prepare Project Directory & Download Xray Core
+      - name: 4. Cache Android & Kotlin Dependencies (Zero Re-download on Code Edit)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.android/build-cache
+          key: gradle-deps-v1-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts') }}
+          restore-keys: |
+            gradle-deps-v1-${{ runner.os }}-
+
+      - name: 5. Install Gradle 8.5 & Xray Core (Only on First Run if Not Cached)
         run: |
-          # تشخیص خودکار مسیر پروژه (چه فایل‌ها در ریشه باشند و چه داخل پوشه Kourosh-NetOptimizer)
+          if [ ! -f "/opt/gradle/gradle-8.5/bin/gradle" ]; then
+            echo "Downloading Gradle 8.5 once for cache..."
+            wget -q https://services.gradle.org/distributions/gradle-8.5-bin.zip -O /tmp/gradle.zip
+            sudo mkdir -p /opt/gradle
+            sudo unzip -q -o /tmp/gradle.zip -d /opt/gradle
+            sudo chmod -R 777 /opt/gradle
+          fi
+
           if [ -d "Kourosh-NetOptimizer/app" ]; then
             cd Kourosh-NetOptimizer
           fi
-          
+
           mkdir -p app/libs
           if [ ! -f "app/libs/libv2ray.aar" ]; then
-            echo "Downloading Android Xray/Libv2ray Core..."
+            echo "Downloading Android Xray Core (libv2ray.aar) once for cache..."
             curl -L -o app/libs/libv2ray.aar "https://github.com/2dust/AndroidLibXrayLite/releases/latest/download/libv2ray.aar"
           fi
 
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
           echo "android.useAndroidX=true" > gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
           echo "org.gradle.caching=true" >> gradle.properties
           echo "org.gradle.parallel=true" >> gradle.properties
-          echo "org.gradle.vfs.watch=true" >> gradle.properties
           echo "org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8" >> gradle.properties
-
-      - name: 5. Setup Gradle 8.5 with Dependency Cache
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.5'
-          cache-read-only: false
 
       - name: 6. Compile Debug APK
         run: |
           if [ -d "Kourosh-NetOptimizer/app" ]; then
             cd Kourosh-NetOptimizer
           fi
-          gradle assembleDebug --build-cache --no-daemon --stacktrace
+          /opt/gradle/gradle-8.5/bin/gradle assembleDebug --build-cache --no-daemon
 
       - name: 7. Upload Compiled APK as Artifact
         uses: actions/upload-artifact@v4
