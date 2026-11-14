@@ -57,7 +57,7 @@ jobs:
           import os
 
           files = {
-              "settings.gradle.kts": """pluginManagement {
+              "settings.gradle.kts": r"""pluginManagement {
               repositories {
                   google()
                   mavenCentral()
@@ -75,20 +75,21 @@ jobs:
           include(":app")
           """,
 
-              "build.gradle.kts": """plugins {
+              "build.gradle.kts": r"""plugins {
               id("com.android.application") version "8.2.2" apply false
               id("org.jetbrains.kotlin.android") version "1.9.22" apply false
           }
           """,
 
-              "gradle.properties": """android.useAndroidX=true
+              "gradle.properties": r"""android.useAndroidX=true
           android.enableJetifier=true
           org.gradle.caching=true
+          android.suppressUnsupportedCompileSdk=34
           org.gradle.parallel=true
           org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
           """,
 
-              "app/build.gradle.kts": """plugins {
+              "app/build.gradle.kts": r"""plugins {
               id("com.android.application")
               id("org.jetbrains.kotlin.android")
           }
@@ -151,7 +152,7 @@ jobs:
           }
           """,
 
-              "app/src/main/AndroidManifest.xml": """<?xml version="1.0" encoding="utf-8"?>
+              "app/src/main/AndroidManifest.xml": r"""<?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:tools="http://schemas.android.com/tools">
 
@@ -197,7 +198,7 @@ jobs:
           </manifest>
           """,
 
-              "app/src/main/java/com/kourosh/netoptimizer/XrayConfigBuilder.kt": """package com.kourosh.netoptimizer
+              "app/src/main/java/com/kourosh/netoptimizer/XrayConfigBuilder.kt": r"""package com.kourosh.netoptimizer
 
           import android.net.Uri
           import org.json.JSONArray
@@ -270,7 +271,7 @@ jobs:
           }
           """,
 
-              "app/src/main/java/com/kourosh/netoptimizer/KouroshVpnService.kt": """package com.kourosh.netoptimizer
+              "app/src/main/java/com/kourosh/netoptimizer/KouroshVpnService.kt": r"""package com.kourosh.netoptimizer
 
           import android.app.Notification
           import android.app.NotificationChannel
@@ -464,7 +465,7 @@ jobs:
           }
           """,
 
-              "app/src/main/java/com/kourosh/netoptimizer/TelecomHardwareEngine.kt": """package com.kourosh.netoptimizer
+              "app/src/main/java/com/kourosh/netoptimizer/TelecomHardwareEngine.kt": r"""package com.kourosh.netoptimizer
 
           import android.annotation.SuppressLint
           import android.app.ActivityManager
@@ -491,7 +492,6 @@ jobs:
           import kotlinx.coroutines.coroutineScope
           import kotlinx.coroutines.withContext
           import java.io.File
-          import java.io.RandomAccessFile
           import java.net.HttpURLConnection
           import java.net.InetSocketAddress
           import java.net.Socket
@@ -851,7 +851,8 @@ jobs:
               private fun decodeIfBase64(input: String): String {
                   if (input.contains("vless://") || input.contains("vmess://")) return input
                   return try {
-                      String(android.util.Base64.decode(input.replace("\\s".toRegex(), ""), android.util.Base64.DEFAULT), Charsets.UTF_8)
+                      val clean = input.filter { !it.isWhitespace() }
+                      String(android.util.Base64.decode(clean, android.util.Base64.DEFAULT), Charsets.UTF_8)
                   } catch (_: Exception) { input }
               }
 
@@ -864,7 +865,7 @@ jobs:
           }
           """,
 
-              "app/src/main/java/com/kourosh/netoptimizer/MainActivity.kt": """package com.kourosh.netoptimizer
+              "app/src/main/java/com/kourosh/netoptimizer/MainActivity.kt": r"""package com.kourosh.netoptimizer
 
           import android.Manifest
           import android.app.Activity
