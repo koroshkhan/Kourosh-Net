@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -33,10 +34,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.net.HttpURLConnection
-import java.net.URL
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.system.exitProcess
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
                         secondary = Color(0xFF10B981)
                     )
                 ) {
-                    MainDashboard(engine = engine)
+                    MainDashboard(activity = this, engine = engine)
                 }
             }
         }
@@ -61,13 +61,17 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun MainDashboard(engine: TelecomHardwareEngine) {
+fun MainDashboard(activity: ComponentActivity, engine: TelecomHardwareEngine) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var telemetry by remember { mutableStateOf(engine.scanAllTowersAndVpnState()) }
-    var statusBanner by remember { mutableStateOf("سیستم رادار مخابراتی، هسته Xray و شتاب‌دهنده آماده است.") }
+    var driversList by remember { mutableStateOf(engine.inspectHardwareDriversForUpdate()) }
+    var statusBanner by remember { mutableStateOf("هوش مصنوعی رادار، بهینه‌ساز سخت‌افزار و هسته Xray آماده است.") }
+
+    // حالت خلبان خودکار (Autopilot)
+    var isAutopilotEnabled by remember { mutableStateOf(false) }
 
     var vlessInputUri by remember {
         mutableStateOf("vless://b831381d-6324-4d53-ad4f-8cda48b30811@speed.cloudflare.com:443?encryption=none&security=tls&sni=speed.cloudflare.com&fp=chrome&type=ws&host=speed.cloudflare.com&path=%2F%3Fed%3D2048#Kourosh_Ready")
@@ -81,9 +85,6 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
     var downloadProgress by remember { mutableIntStateOf(0) }
     var isDownloading by remember { mutableStateOf(false) }
 
-    var vpnKeepAliveActive by remember { mutableStateOf(false) }
-    var keepAlivePulseCount by remember { mutableIntStateOf(0) }
-
     val vpnPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { res ->
@@ -92,9 +93,10 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                 action = "START_VPN"
                 putExtra("VLESS_URI", vlessInputUri)
                 putExtra("CLEAN_IP", cleanIpInput)
+                putExtra("OPTIMAL_MTU", telemetry.recommendedMtu)
             }
             context.startService(startIntent)
-            statusBanner = "🚀 هسته Xray داخلی با Fragment روشن شد!"
+            statusBanner = "🚀 هسته Xray روشن شد و در حال تست عبور واقعی از فیلتر ایران است..."
             telemetry = engine.scanAllTowersAndVpnState()
         }
     }
@@ -105,32 +107,22 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
         telemetry = engine.scanAllTowersAndVpnState()
     }
 
+    // حلقه پایش زنده رادار و خلبان خودکار هر ۲ ثانیه
     LaunchedEffect(Unit) {
-        val perms = arrayOf(
+        val perms = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.READ_PHONE_STATE
         )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
         if (!perms.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }) {
-            permLauncher.launch(perms)
+            permLauncher.launch(perms.toTypedArray())
         }
         while (true) {
             telemetry = engine.scanAllTowersAndVpnState()
             delay(2000)
-        }
-    }
-
-    LaunchedEffect(vpnKeepAliveActive) {
-        while (vpnKeepAliveActive) {
-            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                try {
-                    val conn = URL("https://cp.cloudflare.com/generate_204").openConnection() as HttpURLConnection
-                    conn.connectTimeout = 2500
-                    conn.responseCode
-                    keepAlivePulseCount++
-                } catch (_: Exception) {}
-            }
-            delay(3000)
         }
     }
 
@@ -140,20 +132,29 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                 NavigationBarItem(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    icon = { Text("📡", fontSize = 18.sp) },
-                    label = { Text("رادار دکل‌ها", fontWeight = FontWeight.Bold) }
+                    icon = { Text("📡", fontSize = 16.sp) },
+                    label = { Text("رادار و سخت‌افزار", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                 )
                 NavigationBarItem(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    icon = { Text("🛡️", fontSize = 18.sp) },
-                    label = { Text("فیلترشکن Xray", fontWeight = FontWeight.Bold) }
+                    icon = { Text("🛡️", fontSize = 16.sp) },
+                    label = { Text("فیلترشکن هوشمند", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                 )
                 NavigationBarItem(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
-                    icon = { Text("🚀", fontSize = 18.sp) },
-                    label = { Text("دانلود ۸ کاناله", fontWeight = FontWeight.Bold) }
+                    icon = { Text("🚀", fontSize = 16.sp) },
+                    label = { Text("دانلود ۸ کاناله", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 3,
+                    onClick = {
+                        driversList = engine.inspectHardwareDriversForUpdate()
+                        selectedTab = 3
+                    },
+                    icon = { Text("🔧", fontSize = 16.sp) },
+                    label = { Text("درایورها", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                 )
             }
         }
@@ -164,43 +165,97 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                 .background(Color(0xFF020617))
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // ==================== نوار بالایی: دکمه حالت مخفی در پس‌زمینه + دکمه بستن کامل برنامه ====================
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF0F172A), RoundedCornerShape(14.dp))
-                    .border(
-                        1.dp,
-                        if (telemetry.isVpnActiveOnSystem) Color(0xFF10B981) else Color(0xFFF59E0B),
-                        RoundedCornerShape(14.dp)
-                    )
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column {
-                    Text(
-                        text = if (telemetry.isVpnActiveOnSystem) "🟢 فیلترشکن: روشن (ترافیک تانل‌شده)" else "🟠 فیلترشکن: خاموش (اتصال مستقیم)",
-                        color = if (telemetry.isVpnActiveOnSystem) Color(0xFF34D399) else Color(0xFFFBBF24),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
-                    Text(
-                        text = "اپراتور: ${telemetry.operatorName} | MTU بهینه: ${telemetry.recommendedMtu}",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 11.sp
-                    )
+                Button(
+                    onClick = {
+                        engine.setHardwareWakeLock(true)
+                        if (!KouroshVpnService.isRunning) {
+                            val prep = VpnService.prepare(context)
+                            if (prep == null) {
+                                val bgIntent = Intent(context, KouroshVpnService::class.java).apply {
+                                    action = "START_VPN"
+                                    putExtra("VLESS_URI", vlessInputUri)
+                                    putExtra("CLEAN_IP", cleanIpInput)
+                                    putExtra("OPTIMAL_MTU", telemetry.recommendedMtu)
+                                }
+                                context.startService(bgIntent)
+                            }
+                        }
+                        activity.moveTaskToBack(true)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                    modifier = Modifier.weight(1f).height(44.dp)
+                ) {
+                    Text("🕵️ حالت مخفی در پس‌زمینه", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 }
+
+                Button(
+                    onClick = {
+                        // توقف کامل سرویس VPN، آزادسازی تمام قفل‌های سخت‌افزاری و بستن ۱۰۰٪ برنامه از رم
+                        val stopIntent = Intent(context, KouroshVpnService::class.java).apply { action = "STOP_VPN" }
+                        context.stopService(stopIntent)
+                        engine.releaseAllLocksOnExit()
+                        activity.finishAndRemoveTask()
+                        exitProcess(0)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
+                    modifier = Modifier.weight(1f).height(44.dp)
+                ) {
+                    Text("❌ بستن کامل برنامه", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
+            }
+
+            // ==================== دکمه طلایی هوش مصنوعی خلبان خودکار (اجرای یکجای تمام بهینه‌سازی‌ها) ====================
+            Button(
+                onClick = {
+                    scope.launch {
+                        isAutopilotEnabled = true
+                        statusBanner = "🤖 هوش مصنوعی فعال شد: ۱. اتصال به بهترین دکل ۲. تنظیم سخت‌افزار ۳. تست عبور از فیلتر..."
+                        val tuneMsg = engine.autoConnectToBestTowerAndTuneHardware()
+                        statusBanner = tuneMsg
+
+                        val (bestUri, msg) = engine.fetchAndVerifyRealIranBypass(cleanIpInput) { prog ->
+                            statusBanner = prog
+                        }
+                        if (bestUri != null) {
+                            vlessInputUri = bestUri
+                            val prep = VpnService.prepare(context)
+                            val startIntent = Intent(context, KouroshVpnService::class.java).apply {
+                                action = "START_VPN"
+                                putExtra("VLESS_URI", bestUri)
+                                putExtra("CLEAN_IP", cleanIpInput)
+                                putExtra("OPTIMAL_MTU", telemetry.recommendedMtu)
+                            }
+                            if (prep != null) {
+                                vpnPermissionLauncher.launch(prep)
+                            } else {
+                                context.startService(startIntent)
+                                statusBanner = "🎯 خلبان خودکار کامل شد: بهترین دکل قفل شد و تانل ضد فیلتر روشن گردید!"
+                            }
+                        } else {
+                            statusBanner = msg
+                        }
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                modifier = Modifier.fillMaxWidth().height(50.dp)
+            ) {
                 Text(
-                    text = telemetry.primaryTower?.generation ?: "--",
-                    color = Color(0xFF38BDF8),
+                    "🤖 اجرای هوشمند همه کارها با یک کلیک (دکل + سخت‌افزار + تانل)",
+                    color = Color(0xFF020617),
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 15.sp
+                    fontSize = 12.sp
                 )
             }
 
+            // ==================== تب ۱: رادار زنده دکل مخابراتی و شناخت سخت‌افزار نقطه فعلی ====================
             if (selectedTab == 0) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
@@ -210,16 +265,16 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                     Column(
                         modifier = Modifier.padding(14.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            "📡 رادار زنده دکل‌های مخابراتی اطراف شما",
+                            "📡 رادار زنده دکل‌های مخابراتی و اتصال خودکار",
                             color = Color(0xFF38BDF8),
                             fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
+                            fontSize = 14.sp
                         )
 
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(200.dp)) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(185.dp)) {
                             Canvas(modifier = Modifier.fillMaxSize()) {
                                 val center = Offset(size.width / 2, size.height / 2)
                                 val maxRadius = size.minDimension / 2
@@ -254,78 +309,61 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
 
                         telemetry.primaryTower?.let { t ->
                             Text(
-                                "دکل متصل فعلی: ${t.generation} | فاصله تقریبی: ~${t.estimatedDistanceMeters} متر",
+                                "دکل فعال: ${t.generation} | فاصله: ~${t.estimatedDistanceMeters} متر | اپراتور: ${telemetry.operatorName}",
                                 color = Color(0xFF34D399),
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
+                                fontSize = 12.sp
                             )
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 MetricBox("قدرت (RSRP)", "${t.rsrpDbm} dBm")
                                 MetricBox("کیفیت (SINR)", "${t.sinrDb} dB")
                                 MetricBox("آنتن (PCI)", "${t.pci}")
-                                MetricBox("کانال فرکانس", "${t.bandChannel}")
+                                MetricBox("کانال", "${t.bandChannel}")
                             }
                         }
 
                         Text(
                             text = telemetry.directionHint,
                             color = Color.White,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             modifier = Modifier.background(Color(0xFF020617), RoundedCornerShape(10.dp)).padding(10.dp).fillMaxWidth()
                         )
 
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = { statusBanner = engine.applyNetworkBandLock(lockTo5G = true) },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("قفل 5G (NR)", color = Color(0xFF020617), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                            }
-                            Button(
-                                onClick = { statusBanner = engine.applyNetworkBandLock(lockTo5G = false) },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("قفل 4G خالص", color = Color(0xFF020617), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                            }
-                        }
-
                         Button(
-                            onClick = { statusBanner = engine.applyAndOpenBestApnSettings() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
+                            onClick = { statusBanner = engine.autoConnectToBestTowerAndTuneHardware() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("🌐 کپی خودکار بهترین APN اپراتور + باز کردن تنظیمات APN", color = Color.White, fontSize = 12.sp)
+                            Text("🎯 اتصال اتوماتیک به بهترین دکل + تنظیم سخت‌افزار نقطه فعلی", color = Color(0xFF020617), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
                     }
                 }
 
+                // کارت شناخت کامل سخت‌افزار گوشی و تنظیمات اعمال‌شده در نقطه فعلی
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("🗼 دکل‌های همسایه در شعاع اطراف (${telemetry.neighborTowers.size} دکل):", color = Color(0xFFFBBF24), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                        if (telemetry.neighborTowers.isEmpty()) {
-                            Text("در حال حاضر فقط دکل اصلی در برد آنتن شماست.", color = Color(0xFF94A3B8), fontSize = 11.sp)
-                        } else {
-                            telemetry.neighborTowers.forEach { nb ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().background(Color(0xFF020617), RoundedCornerShape(8.dp)).padding(8.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text("PCI: ${nb.pci} (${nb.generation})", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    Text("فاصله: ~${nb.estimatedDistanceMeters}m", color = Color(0xFF38BDF8), fontSize = 12.sp)
-                                    Text("${nb.rsrpDbm} dBm", color = Color(0xFF34D399), fontSize = 12.sp)
-                                }
-                            }
-                        }
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text("🧠 شناخت واقعی سخت‌افزار گوشی و تنظیمات نقطه فعلی:", color = Color(0xFFFBBF24), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text("• دستگاه: ${telemetry.deviceModel}", color = Color.White, fontSize = 11.sp)
+                        Text("• تراشه (SoC): ${telemetry.socInfo}", color = Color.White, fontSize = 11.sp)
+                        Text("• فرکانس و گاورنر CPU: ${telemetry.cpuFreqAndGov}", color = Color(0xFF38BDF8), fontSize = 11.sp)
+                        Text("• وضعیت حافظه رم: ${telemetry.ramUsageInfo}", color = Color(0xFF34D399), fontSize = 11.sp)
+                        Text("• درایور مودم رادیویی: ${telemetry.basebandDriver}", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                        Text("• هسته و شبکه: ${telemetry.kernelAndTcpInfo}", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                        Text(
+                            "• پروفایل سخت‌افزاری این نقطه: بافر سوکت ${telemetry.recommendedSocketBufferKb}KB | سایز بسته MTU ${telemetry.recommendedMtu}",
+                            color = Color(0xFFFBBF24),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
                     }
                 }
             }
 
+            // ==================== تب ۲: فیلترشکن داخلی Xray و تست واقعی عبور از فیلتر ====================
             if (selectedTab == 1) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
@@ -334,10 +372,10 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                 ) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            "🛡️ هسته داخلی Xray + شکارچی خودکار VLESS",
+                            "🛡️ فیلترشکن داخلی Xray + تست واقعی عبور از فیلتر ایران",
                             color = Color(0xFF34D399),
                             fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
+                            fontSize = 14.sp
                         )
 
                         Button(
@@ -345,7 +383,7 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                                 if (!isFetchingConfig) {
                                     isFetchingConfig = true
                                     scope.launch {
-                                        val (foundUri, msg) = engine.fetchAndSelectBestVlessConfig { progressMsg ->
+                                        val (foundUri, msg) = engine.fetchAndVerifyRealIranBypass(cleanIpInput) { progressMsg ->
                                             statusBanner = progressMsg
                                         }
                                         if (foundUri != null) {
@@ -361,8 +399,8 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                             modifier = Modifier.fillMaxWidth().height(48.dp)
                         ) {
                             Text(
-                                if (isFetchingConfig) "⏳ در حال دانلود و تست پینگ سرورهای روز..."
-                                else "⚡ دریافت خودکار کانفیگ VLESS روز و جایگذاری در کادر",
+                                if (isFetchingConfig) "⏳ در حال تست عبور از فیلترینگ روی سرورهای روز..."
+                                else "⚡ شکار خودکار بهترین کانفیگ + تست واقعی عبور از فیلتر",
                                 color = Color(0xFF020617),
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 12.sp
@@ -372,7 +410,7 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                         OutlinedTextField(
                             value = vlessInputUri,
                             onValueChange = { vlessInputUri = it },
-                            label = { Text("لینک کانفیگ VLESS فعال (قابل ویرایش یا دریافت خودکار)", fontSize = 11.sp) },
+                            label = { Text("کانفیگ VLESS تست‌شده (مجهز به Fragment)", fontSize = 11.sp) },
                             maxLines = 3,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -385,7 +423,7 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                             OutlinedTextField(
                                 value = cleanIpInput,
                                 onValueChange = { cleanIpInput = it },
-                                label = { Text("آی‌پی تمیز کلودفلر (تزریق خودکار)", fontSize = 11.sp) },
+                                label = { Text("آی‌پی تمیز کلودفلر", fontSize = 11.sp) },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
@@ -393,10 +431,10 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                                 onClick = {
                                     val pool = listOf("162.159.135.42", "104.16.132.229", "172.67.73.163", "188.114.96.3")
                                     cleanIpInput = pool.filter { it != cleanIpInput }.random()
-                                    statusBanner = "✅ آی‌پی تمیز لبه CDN به $cleanIpInput تغییر کرد."
+                                    statusBanner = "✅ آی‌پی تمیز به $cleanIpInput تغییر یافت."
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
-                                modifier = Modifier.height(54.dp)
+                                modifier = Modifier.height(52.dp)
                             ) {
                                 Text("تعویض IP", color = Color.White, fontSize = 11.sp)
                             }
@@ -407,7 +445,7 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                                 if (KouroshVpnService.isRunning) {
                                     val stopIntent = Intent(context, KouroshVpnService::class.java).apply { action = "STOP_VPN" }
                                     context.startService(stopIntent)
-                                    statusBanner = "🛑 هسته داخلی Xray متوقف شد."
+                                    statusBanner = "🛑 فیلترشکن داخلی متوقف شد."
                                     telemetry = engine.scanAllTowersAndVpnState()
                                 } else {
                                     val prep = VpnService.prepare(context)
@@ -415,12 +453,13 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                                         action = "START_VPN"
                                         putExtra("VLESS_URI", vlessInputUri)
                                         putExtra("CLEAN_IP", cleanIpInput)
+                                        putExtra("OPTIMAL_MTU", telemetry.recommendedMtu)
                                     }
                                     if (prep != null) {
                                         vpnPermissionLauncher.launch(prep)
                                     } else {
                                         context.startService(startIntent)
-                                        statusBanner = "🚀 هسته Xray با کانفیگ جدید و Fragment روشن شد!"
+                                        statusBanner = "🚀 هسته Xray روشن شد؛ در حال تست واقعی عبور از فیلتر..."
                                         telemetry = engine.scanAllTowersAndVpnState()
                                     }
                                 }
@@ -428,68 +467,29 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (KouroshVpnService.isRunning) Color(0xFFE11D48) else Color(0xFF10B981)
                             ),
-                            modifier = Modifier.fillMaxWidth().height(52.dp)
+                            modifier = Modifier.fillMaxWidth().height(50.dp)
                         ) {
                             Text(
                                 if (KouroshVpnService.isRunning) "🛑 قطع اتصال فیلترشکن داخلی (Xray)"
-                                else "🚀 اتصال مستقیم با هسته Xray داخلی (VLESS + Fragment)",
+                                else "🚀 اتصال مستقیم و تست واقعی عبور از فیلتر (HTTP 204)",
                                 color = if (KouroshVpnService.isRunning) Color.White else Color(0xFF020617),
                                 fontWeight = FontWeight.ExtraBold,
-                                fontSize = 13.sp
-                            )
-                        }
-
-                        Text(
-                            text = "وضعیت هسته: ${KouroshVpnService.activeServerStatus}",
-                            color = Color(0xFF38BDF8),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.background(Color(0xFF020617), RoundedCornerShape(8.dp)).padding(10.dp).fillMaxWidth()
-                        )
-
-                        Button(
-                            onClick = {
-                                vpnKeepAliveActive = !vpnKeepAliveActive
-                                engine.setHardwareWakeLock(vpnKeepAliveActive)
-                                statusBanner = if (vpnKeepAliveActive) {
-                                    "🔥 تثبیت‌کننده تانل فعال شد: ارسال پالس هر ۳ ثانیه برای جلوگیری از قطع شدن فیلترشکن."
-                                } else {
-                                    "تثبیت‌کننده تانل متوقف شد."
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (vpnKeepAliveActive) Color(0xFF7C3AED) else Color(0xFF1E293B)
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                if (vpnKeepAliveActive) "🔥 ضدقطع فیلترشکن فعال است (پالس‌ها: $keepAlivePulseCount)"
-                                else "🛡️ فعال‌سازی ضدقطع فیلترشکن (مخصوص ایرانسل و همراه اول)",
-                                color = Color.White,
                                 fontSize = 12.sp
                             )
                         }
 
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = { statusBanner = engine.launchExternalVpnClient("app.hiddify.com") },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("باز کردن Hiddify", color = Color(0xFF38BDF8), fontSize = 11.sp)
-                            }
-                            Button(
-                                onClick = { statusBanner = engine.launchExternalVpnClient("com.v2ray.ang") },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("باز کردن v2rayNG", color = Color(0xFFFBBF24), fontSize = 11.sp)
-                            }
-                        }
+                        Text(
+                            text = "وضعیت زنده تانل: ${KouroshVpnService.activeServerStatus}",
+                            color = if (KouroshVpnService.isVerifiedBypass) Color(0xFF34D399) else Color(0xFF38BDF8),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.background(Color(0xFF020617), RoundedCornerShape(8.dp)).padding(10.dp).fillMaxWidth()
+                        )
                     }
                 }
             }
 
+            // ==================== تب ۳: تنظیم سخت‌افزار و نرم‌افزار برای بهترین دانلود ۸ کاناله ====================
             if (selectedTab == 2) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
@@ -497,17 +497,17 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                     modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF38BDF8), RoundedCornerShape(16.dp))
                 ) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("🚀 شتاب‌دهنده دانلود ۸ کاناله (Multi-Connection Boost)", color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text("🚀 شتاب‌دهنده سخت‌افزاری دانلود ۸ کاناله", color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         Text(
-                            "این موتور هم در حالت فیلترشکن روشن و هم خاموش، فایل را به ۸ بخش تقسیم کرده و موازی دانلود می‌کند تا حداکثر سرعت دکل را دریافت کنید:",
+                            "بافر سخت‌افزاری این نقطه به طور خودکار روی ${telemetry.recommendedSocketBufferKb}KB و قفل ضدخواب مودم 5G/4G تنظیم شده است:",
                             color = Color(0xFF94A3B8),
                             fontSize = 11.sp
                         )
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            MetricBox("سرعت زنده (Mbps)", "${"%.2f".format(liveSpeedMbps)} Mbps")
+                            MetricBox("سرعت (Mbps)", "${"%.2f".format(liveSpeedMbps)} Mbps")
                             MetricBox("سرعت (MB/s)", "${"%.2f".format(liveSpeedMbps / 8.0)} MB/s")
-                            MetricBox("حجم دریافت‌شده", "${"%.2f".format(downloadedMb)} MB")
+                            MetricBox("حجم دانلود", "${"%.2f".format(downloadedMb)} MB")
                         }
 
                         LinearProgressIndicator(
@@ -520,7 +520,7 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                         OutlinedTextField(
                             value = downloadUrl,
                             onValueChange = { downloadUrl = it },
-                            label = { Text("لینک مستقیم فایل (خالی = تست اشباع سرعت ۸ کاناله)", fontSize = 11.sp) },
+                            label = { Text("لینک مستقیم فایل یا درایور (خالی = تست اشباع سرعت ۸ کاناله)", fontSize = 11.sp) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -530,8 +530,7 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                                 if (!isDownloading) {
                                     isDownloading = true
                                     scope.launch {
-                                        engine.setHardwareWakeLock(true)
-                                        statusBanner = "⏳ در حال باز کردن ۸ کانال موازی دانلود روی سخت‌افزار..."
+                                        statusBanner = "⏳ قفل حداکثر توان CPU/Modem فعال شد؛ شروع دانلود ۸ کاناله..."
                                         statusBanner = engine.runParallelTurboDownload(downloadUrl, channels = 8) { mbps, mb, pct ->
                                             liveSpeedMbps = mbps
                                             downloadedMb = mb
@@ -546,17 +545,83 @@ fun MainDashboard(engine: TelecomHardwareEngine) {
                             modifier = Modifier.fillMaxWidth().height(48.dp)
                         ) {
                             Text(
-                                if (isDownloading) "⏳ در حال دانلود با ۸ کانال هم‌زمان..."
-                                else "📥 شروع دانلود توربو ۸ کاناله / تست اشباع سرعت",
+                                if (isDownloading) "⏳ در حال دانلود با حداکثر توان سخت‌افزار..."
+                                else "📥 شروع دانلود توربو ۸ کاناله با بهینه‌سازی سخت‌افزار",
                                 color = Color(0xFF020617),
                                 fontWeight = FontWeight.ExtraBold,
-                                fontSize = 13.sp
+                                fontSize = 12.sp
                             )
                         }
                     }
                 }
             }
 
+            // ==================== تب ۴: بررسی و دانلود درایورهای بروزشده سخت‌افزار گوشی ====================
+            if (selectedTab == 3) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFFF59E0B), RoundedCornerShape(16.dp))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            "🔧 بررسی درایورهای سخت‌افزار گوشی و دانلود بروزرسانی‌ها",
+                            color = Color(0xFFFBBF24),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            "شناسه برد سخت‌افزاری شما: ${telemetry.deviceModel} | تراشه: ${telemetry.socInfo}",
+                            color = Color(0xFF38BDF8),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        driversList.forEach { drv ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF020617), RoundedCornerShape(12.dp))
+                                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(12.dp))
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(drv.componentName, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text("نسخه فعلی نصب‌شده: ${drv.currentDriverVersion}", color = Color(0xFF38BDF8), fontSize = 11.sp)
+                                Text("وضعیت: ${drv.statusBadge}", color = Color(0xFF34D399), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                Text(drv.updateDescription, color = Color(0xFF94A3B8), fontSize = 10.sp)
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    if (drv.directDownloadUrl.isNotEmpty()) {
+                                        Button(
+                                            onClick = {
+                                                downloadUrl = drv.directDownloadUrl
+                                                selectedTab = 2
+                                                statusBanner = "📥 لینک پکیج درایور به دانلودر ۸ کاناله منتقل شد؛ دکمه شروع دانلود را بزنید."
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("دانلود مستقیم در اپ", color = Color(0xFF020617), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+                                    }
+                                    Button(
+                                        onClick = {
+                                            statusBanner = engine.openDriverUpdateWebPage(drv.fallbackWebPage)
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155)),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("مخزن رسمی درایور گوشی", color = Color.White, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // نوار گزارش وضعیت در پایین صفحه
             Text(
                 text = statusBanner,
                 color = Color(0xFF34D399),
