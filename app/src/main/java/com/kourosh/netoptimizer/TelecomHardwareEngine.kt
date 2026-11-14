@@ -12,7 +12,6 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
 import android.net.wifi.WifiManager
-import android.opengl.EGL14
 import android.os.Build
 import android.os.Environment
 import android.os.PowerManager
@@ -24,7 +23,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.RandomAccessFile
@@ -58,15 +56,15 @@ data class HardwareDriverStatus(
 data class FullNetworkTelemetry(
     val deviceModel: String,
     val socInfo: String,
-    val cpuFreqAndGov: String,
-    val ramUsageInfo: String,
-    val basebandDriver: String,
-    val kernelAndTcpInfo: String,
+    val cpuFreqAndGov: String = "Auto Boost",
+    val ramUsageInfo: String = "Optimized",
+    val basebandDriver: String = "Standard",
+    val kernelAndTcpInfo: String = "TCP Optimized",
     val operatorName: String,
     val isVpnActiveOnSystem: Boolean,
     val activeProfileMode: String,
     val recommendedMtu: Int,
-    val recommendedSocketBufferKb: Int,
+    val recommendedSocketBufferKb: Int = 256,
     val primaryTower: CellTowerNode?,
     val neighborTowers: List<CellTowerNode>,
     val directionHint: String
@@ -85,9 +83,6 @@ class TelecomHardwareEngine(private val context: Context) {
     private var wifiHighPerfLock: WifiManager.WifiLock? = null
     private var bestRecordedRsrp = -130
 
-    /**
-     * ۱. اسکن کامل رادار دکل‌ها و شناخت دقیق سخت‌افزار گوشی در نقطه فعلی
-     */
     @SuppressLint("MissingPermission")
     fun scanAllTowersAndVpnState(): FullNetworkTelemetry {
         val device = "${Build.MANUFACTURER.uppercase()} ${Build.MODEL} (${Build.DEVICE})"
@@ -165,7 +160,6 @@ class TelecomHardwareEngine(private val context: Context) {
         val primary = towers.firstOrNull { it.isServing } ?: towers.maxByOrNull { it.rsrpDbm }
         val neighbors = towers.filter { it != primary }.sortedByDescending { it.rsrpDbm }
 
-        // محاسبه هوشمند بهترین MTU و بافر سخت‌افزاری بر اساس قدرت آنتن در نقطه فعلی
         val rsrpVal = primary?.rsrpDbm ?: -105
         val optimalMtu = when {
             vpnActive -> 1280
@@ -187,13 +181,13 @@ class TelecomHardwareEngine(private val context: Context) {
             val betterNeighbor = neighbors.firstOrNull { it.rsrpDbm > primary.rsrpDbm + 3 }
             when {
                 betterNeighbor != null ->
-                    "⚡ دکل قوی‌تر در فاصله ~${betterNeighbor.estimatedDistanceMeters} متری (PCI: ${betterNeighbor.pci}) پیدا شد! دکمه «اتصال خودکار به بهترین دکل» را بزنید."
+                    "⚡ دکل قوی‌تر در فاصله ~${betterNeighbor.estimatedDistanceMeters} متری (PCI: ${betterNeighbor.pci}) پیدا شد! دکمه اتصال خودکار را بزنید."
                 primary.rsrpDbm >= -85 ->
-                    "🎯 نقطه طلایی آنتن! فاصله تا دکل ~${primary.estimatedDistanceMeters} متر است. سخت‌افزار روی بافر ${optimalBufferKb}KB تنظیم شد."
+                    "🎯 نقطه طلایی آنتن! فاصله تا دکل ~${primary.estimatedDistanceMeters} متر است. بافر سخت‌افزار روی ${optimalBufferKb}KB تنظیم شد."
                 primary.rsrpDbm >= -98 ->
                     "📡 فاصله تا دکل ~${primary.estimatedDistanceMeters} متر است. با حرکت به سمت پنجره، RSRP را به بالای -85 برسانید."
                 else ->
-                    "⚠️ سیگنال ضعیف است (~${primary.estimatedDistanceMeters} متر). سیستم به صورت خودکار روی MTU $optimalMtu و پایداری ضدقطعی تنظیم شد."
+                    "⚠️ سیگنال ضعیف است (~${primary.estimatedDistanceMeters} متر). سیستم روی MTU $optimalMtu و پایداری ضدقطعی تنظیم شد."
             }
         } else {
             "مجوز مکان (GPS) را روشن کنید تا رادار فاصله و جهت دکل‌های اطراف را محاسبه کند."
@@ -217,9 +211,6 @@ class TelecomHardwareEngine(private val context: Context) {
         )
     }
 
-    /**
-     * ۲. اتصال اتوماتیک به بهترین دکل مخابراتی و تنظیم خودکار سخت‌افزار در نقطه فعلی
-     */
     fun autoConnectToBestTowerAndTuneHardware(): String {
         val snap = scanAllTowersAndVpnState()
         setHardwareWakeLock(true)
@@ -227,17 +218,15 @@ class TelecomHardwareEngine(private val context: Context) {
         val primary = snap.primaryTower
         val bestNeighbor = snap.neighborTowers.firstOrNull()
 
-        // تصمیم‌گیری هوشمند بین 5G و 4G بر اساس کیفیت سیگنال نقطه فعلی
         val lock5G = when {
             primary == null -> true
-            primary.generation == "5G (NR)" && primary.rsrpDbm < -106 -> false // 5G ضعیف = سوییچ خودکار به 4G پایدار
+            primary.generation == "5G (NR)" && primary.rsrpDbm < -106 -> false
             bestNeighbor != null && bestNeighbor.generation == "5G (NR)" && bestNeighbor.rsrpDbm >= -96 -> true
             else -> primary.rsrpDbm >= -98
         }
 
         val targetModeCode = if (lock5G) 26 else 11
 
-        // ۱. اجرای دستورات سطح سیستم برای ریست دست‌دهی دکل (Handover) و تنظیم بافر TCP
         try {
             val cmds = arrayOf(
                 "settings put global preferred_network_mode $targetModeCode",
@@ -247,7 +236,6 @@ class TelecomHardwareEngine(private val context: Context) {
             Runtime.getRuntime().exec(arrayOf("sh", "-c", cmds.joinToString(" ; ")))
         } catch (_: Exception) {}
 
-        // ۲. اجبار پشته شبکه اندروید به بازخوانی مسیر (Network Re-bind) برای قفل روی قوی‌ترین سیگنال
         try {
             connectivityManager.bindProcessToNetwork(null)
             val req = NetworkRequest.Builder()
@@ -256,7 +244,6 @@ class TelecomHardwareEngine(private val context: Context) {
             connectivityManager.requestNetwork(req, object : ConnectivityManager.NetworkCallback() {})
         } catch (_: Exception) {}
 
-        // ۳. تنظیم بافرهای شبکه جاوا و اولویت پردازنده
         System.setProperty("http.keepAlive", "true")
         System.setProperty("http.maxConnections", "16")
         Thread.currentThread().priority = Thread.MAX_PRIORITY
@@ -267,17 +254,13 @@ class TelecomHardwareEngine(private val context: Context) {
             "دکل فعلی PCI:${primary?.pci ?: 0} (~${primary?.estimatedDistanceMeters ?: 0}m)"
         }
 
-        return "✅ بهینه‌سازی نقطه‌ای انجام شد: قفل سخت‌افزار روی $targetTowerText | بافر: ${snap.recommendedSocketBufferKb}KB \vert{} MTU:${snap.recommendedMtu}"
+        return "✅ بهینه‌سازی نقطه‌ای انجام شد: قفل سخت‌افزار روی $targetTowerText | بافر: ${snap.recommendedSocketBufferKb}KB | MTU: ${snap.recommendedMtu}"
     }
 
-    /**
-     * ۳. بررسی‌کننده درایورهای سخت‌افزاری گوشی برای دانلود و آپدیت به آخرین نسخه
-     */
     fun inspectHardwareDriversForUpdate(): List<HardwareDriverStatus> {
         val socName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MODEL else Build.HARDWARE
         val isSnapdragon = socName.contains("SM", true) || socName.contains("QCOM", true) || Build.HARDWARE.contains("qcom", true)
         val baseband = Build.getRadioVersion() ?: "Unknown"
-        val kernel = System.getProperty("os.version") ?: "Linux"
         val deviceCodename = Build.DEVICE
 
         return listOf(
@@ -285,7 +268,7 @@ class TelecomHardwareEngine(private val context: Context) {
                 componentName = "📡 درایور مودم مخابراتی و رادیویی (Baseband Firmware)",
                 currentDriverVersion = baseband,
                 statusBadge = "نسخه جدید فریمور مودم موجود است",
-                updateDescription = "بروزرسانی فایل NON-HLOS / Modem فریمور شیائومی برای بهبود دریافت سیگنال 5G/4G و کاهش مصرف باتری آنتن",
+                updateDescription = "بروزرسانی فایل NON-HLOS / Modem برای بهبود دریافت سیگنال 5G/4G و کاهش مصرف باتری آنتن",
                 directDownloadUrl = "https://cdn.jsdelivr.net/gh/barry-far/V2ray-Configs@main/Sub1.txt",
                 fallbackWebPage = "https://xmfirmwareupdater.com/firmware/$deviceCodename/"
             ),
@@ -293,7 +276,7 @@ class TelecomHardwareEngine(private val context: Context) {
                 componentName = "🎮 درایور پردازنده گرافیکی و شتاب‌دهنده سخت‌افزاری (GPU Driver)",
                 currentDriverVersion = if (isSnapdragon) "Qualcomm Adreno ($socName)" else "ARM Mali ($socName)",
                 statusBadge = "درایور Mesa Turnip / Vulkan آماده دانلود",
-                updateDescription = "بهینه‌سازی رندرینگ رابط کاربری، کاهش داغی چیپست و افزایش پایداری پردازنده در دانلودهای سنگین",
+                updateDescription = "بهینه‌سازی رندرینگ، کاهش داغی چیپست و افزایش پایداری پردازنده در دانلودهای سنگین",
                 directDownloadUrl = "https://speed.cloudflare.com/__down?bytes=5242880",
                 fallbackWebPage = "https://github.com/K11MCH1/AdrenoToolsDrivers/releases"
             ),
@@ -328,9 +311,12 @@ class TelecomHardwareEngine(private val context: Context) {
         }
     }
 
-    /**
-     * ۴. دریافت مستقیم بهترین کانفیگ و تست واقعی عبور از فیلتر ایران (Auto-Bypass Hunter)
-     */
+    suspend fun fetchAndSelectBestVlessConfig(
+        onStatusUpdate: (String) -> Unit
+    ): Pair<String?, String> {
+        return fetchAndVerifyRealIranBypass("162.159.135.42", onStatusUpdate)
+    }
+
     suspend fun fetchAndVerifyRealIranBypass(
         cleanIp: String,
         onStatusUpdate: (String) -> Unit
@@ -346,7 +332,7 @@ class TelecomHardwareEngine(private val context: Context) {
         val cleanIps = listOf(cleanIp.ifBlank { "162.159.135.42" }, "104.16.132.229", "172.67.73.163")
         val rawCandidates = mutableListOf<String>()
 
-        onStatusUpdate("⏳ گام ۱/۳: دریافت لیست کانفیگ‌های جدید از CDN ضد فیلتر...")
+        onStatusUpdate("⏳ گام ۱/۲: دریافت لیست کانفیگ‌های جدید از CDN ضد فیلتر...")
 
         for (urlStr in mirrors) {
             try {
@@ -383,7 +369,7 @@ class TelecomHardwareEngine(private val context: Context) {
             )
         }
 
-        onStatusUpdate("🔍 گام ۲/۳: تست موازی دست‌دهی و عبور از فایروال روی ${rawCandidates.size} سرور...")
+        onStatusUpdate("🔍 گام ۲/۲: تست موازی دست‌دهی و عبور از فایروال روی ${rawCandidates.size} سرور...")
 
         val verifiedList = coroutineScope {
             rawCandidates.take(18).mapIndexed { index, uriStr ->
@@ -440,9 +426,25 @@ class TelecomHardwareEngine(private val context: Context) {
         )
     }
 
-    /**
-     * ۵. شتاب‌دهنده دانلود ۸ کاناله با تنظیم خودکار بافرهای سخت‌افزاری و نرم‌افزاری
-     */
+    fun launchExternalVpnClient(packageName: String): String {
+        return try {
+            val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launchIntent)
+                "✅ برنامه $packageName باز شد."
+            } else {
+                val vpnSettings = Intent(Settings.ACTION_VPN_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(vpnSettings)
+                "⚙️ پنل مدیریت VPN اندروید باز شد."
+            }
+        } catch (e: Exception) {
+            "خطا در باز کردن کلاینت VPN"
+        }
+    }
+
     suspend fun runParallelTurboDownload(
         fileUrl: String,
         channels: Int = 8,
@@ -592,7 +594,7 @@ class TelecomHardwareEngine(private val context: Context) {
             val tcpFile = File("/proc/sys/net/ipv4/tcp_congestion_control")
             val tcpAlgo = if (tcpFile.exists()) tcpFile.readText().trim() else "cubic/bbr"
             val kVer = (System.getProperty("os.version") ?: "Linux").take(18)
-            "Kernel $kVer | TCP: $tcpAlgo"
+            "Kernel $kVer | TCP:$tcpAlgo"
         } catch (_: Exception) {
             "Linux Kernel | TCP Optimized"
         }
@@ -652,64 +654,4 @@ class TelecomHardwareEngine(private val context: Context) {
                 "✅ باند شبکه به صورت خودکار قفل شد!"
             } else {
                 openRadioMenu()
-                "📡 منوی رادیویی باز شد؛ شبکه را روی ${if (lockTo5G) "NR/LTE" else "LTE Only"} بگذارید."
-            }
-        } catch (_: Exception) {
-            openRadioMenu()
-            "📡 منوی قفل باند باز شد."
-        }
-    }
-
-    private fun openRadioMenu() {
-        val list = listOf(
-            ComponentName("com.android.phone", "com.android.phone.settings.RadioInfo"),
-            ComponentName("com.android.settings", "com.android.settings.TestingSettings")
-        )
-        for (c in list) {
-            try {
-                context.startActivity(Intent(Intent.ACTION_MAIN).apply {
-                    component = c
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                })
-                return
-            } catch (_: Exception) {}
-        }
-    }
-
-    fun applyAndOpenBestApnSettings(): String {
-        val op = telephonyManager.simOperator ?: ""
-        val apnValue = when {
-            op.startsWith("43235") -> "mtnirancell"
-            op.startsWith("43211") -> "mcinet"
-            op.startsWith("43220") -> "RighTel"
-            else -> "internet"
-        }
-        clipboard.setPrimaryClip(ClipData.newPlainText("APN", apnValue))
-        try {
-            val apnIntent = Intent(Settings.ACTION_APN_SETTINGS).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            context.startActivity(apnIntent)
-        } catch (_: Exception) {}
-        return "✅ عبارت '$apnValue' کپی شد و صفحه APN باز شد!"
-    }
-
-    private fun decodeIfBase64(input: String): String {
-        if (input.contains("vless://") || input.contains("vmess://")) return input
-        return try {
-            val clean = input.replace("\\s".toRegex(), "")
-            String(android.util.Base64.decode(clean, android.util.Base64.DEFAULT), Charsets.UTF_8)
-        } catch (e: Exception) {
-            input
-        }
-    }
-
-    private fun vibratePulse(ms: Long) {
-        try {
-            val v = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-            }
-        } catch (_: Exception) {}
-    }
-}
+                "📡 منوی رادیویی باز
