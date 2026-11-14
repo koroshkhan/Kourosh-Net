@@ -1,4 +1,4 @@
-name: Build Kourosh NetOptimizer APK (Permanent Cache)
+name: Build Kourosh NetRadar AI APK (Auto-Sync + Cached)
 
 on:
   push:
@@ -24,55 +24,207 @@ jobs:
         with:
           path: |
             /opt/gradle/gradle-8.5
-            **/app/libs/libv2ray.aar
-          key: static-tools-gradle85-xray-v1
+            app/libs/libv2ray.aar
+          key: static-tools-gradle85-xray-v2
 
-      - name: 4. Cache Android & Kotlin Dependencies (Zero Re-download on Code Edit)
+      - name: 4. Cache Android & Kotlin Dependencies (Zero Re-download)
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
             ~/.android/build-cache
-          key: gradle-deps-v1-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts') }}
+          key: gradle-deps-v2-${{ runner.os }}
           restore-keys: |
-            gradle-deps-v1-${{ runner.os }}-
+            gradle-deps-v2-
+            gradle-deps-v1-
 
-      - name: 5. Install Gradle 8.5 & Xray Core (Only on First Run if Not Cached)
+      - name: 5. Auto-Generate Verified Kotlin Files & Setup Cache
         run: |
           if [ ! -f "/opt/gradle/gradle-8.5/bin/gradle" ]; then
-            echo "Downloading Gradle 8.5 once for cache..."
             wget -q https://services.gradle.org/distributions/gradle-8.5-bin.zip -O /tmp/gradle.zip
             sudo mkdir -p /opt/gradle
             sudo unzip -q -o /tmp/gradle.zip -d /opt/gradle
             sudo chmod -R 777 /opt/gradle
           fi
 
-          if [ -d "Kourosh-NetOptimizer/app" ]; then
-            cd Kourosh-NetOptimizer
-          fi
-
           mkdir -p app/libs
           if [ ! -f "app/libs/libv2ray.aar" ]; then
-            echo "Downloading Android Xray Core (libv2ray.aar) once for cache..."
             curl -L -o app/libs/libv2ray.aar "https://github.com/2dust/AndroidLibXrayLite/releases/latest/download/libv2ray.aar"
           fi
 
-          echo "android.useAndroidX=true" > gradle.properties
-          echo "android.enableJetifier=true" >> gradle.properties
-          echo "org.gradle.caching=true" >> gradle.properties
-          echo "org.gradle.parallel=true" >> gradle.properties
-          echo "org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8" >> gradle.properties
+          python3 - << 'EOF'
+          import os
 
-      - name: 6. Compile Debug APK
-        run: |
-          if [ -d "Kourosh-NetOptimizer/app" ]; then
-            cd Kourosh-NetOptimizer
-          fi
-          /opt/gradle/gradle-8.5/bin/gradle assembleDebug --build-cache --no-daemon
+          files = {
+              "settings.gradle.kts": """pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "KouroshNetOptimizer"
+          include(":app")
+          """,
 
-      - name: 7. Upload Compiled APK as Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kourosh-NetOptimizer-Xray-APK
-          path: "**/app/build/outputs/apk/debug/app-debug.apk"
+              "build.gradle.kts": """plugins {
+              id("com.android.application") version "8.2.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+          }
+          """,
+
+              "gradle.properties": """android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.caching=true
+          org.gradle.parallel=true
+          org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+          """,
+
+              "app/build.gradle.kts": """plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.kourosh.netoptimizer"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.kourosh.netoptimizer"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 4
+                  versionName = "4.0-AI-Pro"
+
+                  ndk {
+                      abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              buildFeatures {
+                  compose = true
+              }
+
+              composeOptions {
+                  kotlinCompilerExtensionVersion = "1.5.8"
+              }
+
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
+          }
+
+          dependencies {
+              implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+              implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+              implementation("androidx.core:core-ktx:1.12.0")
+              implementation("androidx.activity:activity-compose:1.8.2")
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+          }
+          """,
+
+              "app/src/main/AndroidManifest.xml": """<?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools">
+
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+                  tools:ignore="ProtectedPermissions" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="Kourosh NetRadar AI"
+                  android:supportsRtl="true"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".KouroshVpnService"
+                      android:permission="android.permission.BIND_VPN_SERVICE"
+                      android:exported="false">
+                      <intent-filter>
+                          <action android:name="android.net.VpnService" />
+                      </intent-filter>
+                  </service>
+              </application>
+          </manifest>
+          """,
+
+              "app/src/main/java/com/kourosh/netoptimizer/XrayConfigBuilder.kt": """package com.kourosh.netoptimizer
+
+          import android.net.Uri
+          import org.json.JSONArray
+          import org.json.JSONObject
+
+          object XrayConfigBuilder {
+              fun buildJsonFromVlessUri(vlessUri: String, cleanIpOverride: String = ""): String {
+                  val trimmed = vlessUri.trim()
+                  require(trimmed.startsWith("vless://")) { "Invalid VLESS URI" }
+                  val uri = Uri.parse(trimmed)
+                  val uuid = uri.userInfo ?: "b831381d-6324-4d53-ad4f-8cda48b30811"
+                  val origHost = uri.host ?: "speed.cloudflare.com"
+                  val port = if (uri.port != -1) uri.port else 443
+                  val security = uri.getQueryParameter("security") ?: "tls"
+                  val netType = uri.getQueryParameter("type") ?: "ws"
+                  val sni = uri.getQueryParameter("sni") ?: uri.getQueryParameter("host") ?: origHost
+                  val wsHost = uri.getQueryParameter("host") ?: sni
+                  val wsPath = uri.getQueryParameter("path") ?: "/"
+                  val fp = uri.getQueryParameter("fp") ?: "chrome"
+                  val pbk = uri.getQueryParameter("pbk") ?: ""
+                  val sid = uri.getQueryParameter("sid") ?: ""
+                  val flow = uri.getQueryParameter("flow") ?: ""
+
+                  val finalServerAddress = if (cleanIpOverride.isNotBlank() && netType == "ws") {
+                      cleanIpOverride.trim()
+                  } else {
+                      origHost
+                  }
+
+                  val root
