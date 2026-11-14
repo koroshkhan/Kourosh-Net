@@ -69,11 +69,12 @@ class KouroshVpnService : VpnService() {
             }
             val pendingIntent = PendingIntent.getActivity(this, 0, openIntent, pendingFlags)
 
+            // استفاده از آیکون عمومی و استاندارد اندروید (ic_lock_lock)
             val notif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 Notification.Builder(this, channelId)
                     .setContentTitle("Kourosh NetRadar AI (حالت مخفی فعال)")
                     .setContentText(statusText)
-                    .setSmallIcon(android.R.drawable.stat_sys_vpnd)
+                    .setSmallIcon(android.R.drawable.ic_lock_lock)
                     .setContentIntent(pendingIntent)
                     .setOngoing(true)
                     .build()
@@ -82,7 +83,7 @@ class KouroshVpnService : VpnService() {
                 Notification.Builder(this)
                     .setContentTitle("Kourosh NetRadar AI")
                     .setContentText(statusText)
-                    .setSmallIcon(android.R.drawable.stat_sys_vpnd)
+                    .setSmallIcon(android.R.drawable.ic_lock_lock)
                     .setContentIntent(pendingIntent)
                     .setOngoing(true)
                     .build()
@@ -204,7 +205,6 @@ class KouroshVpnService : VpnService() {
             isRunning = vpnInterface != null
             activeServerStatus = "⏳ هسته روشن شد؛ در حال تست واقعی عبور از فیلتر ایران..."
 
-            // تست واقعی عبور از فیلترینگ ایران از طریق پورت پراکسی 10809 خود Xray
             Thread {
                 try {
                     Thread.sleep(1400)
@@ -265,6 +265,7 @@ class KouroshVpnService : VpnService() {
         lastMeasuredDelayMs = -1L
         activeServerStatus = "🛑 هسته Xray متوقف شد."
         try {
+            @Suppress("DEPRECATION")
             stopForeground(true)
         } catch (_: Exception) {}
         stopSelf()
